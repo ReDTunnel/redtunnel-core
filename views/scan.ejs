@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>ReDTunnel - Scan</title>
+    <script type="module">
+        import {Pool} from '/js/jspool.js';
+
+        function scan(ip, port, timeout = 5000, findAuthResponses = false) {
+            return new Promise((resolve, reject) => {
+                let url = `http://${ip}:${port}`;
+
+                let iframe = document.createElement('iframe');
+                iframe.url = "about:blank";
+                iframe.async = true;
+                iframe.style.display = 'none';
+                iframe.sandbox = "allow-scripts allow-same-origin";
+                document.body.appendChild(iframe);
+
+                let element = document.createElement('script');
+                element.src = url;
+                element.async = true;
+
+                let timeOutId = null;
+                if (timeout) {
+                    timeOutId = setTimeout(() => {
+                        resolve({
+                            ip: ip,
+                            port: port,
+                            timeout: true,
+                            error: !findAuthResponses ? "timeout" : undefined
+                        });
+                        document.body.removeChild(iframe);
+                    }, timeout);
+                }
+                element.onload = () => {
+                    if (timeOutId) {
+                        clearTimeout(timeOutId);
+                    }
+                    resolve({
+                        ip: ip,
+                        port: port,
+                        timeout: false
+                    });
+                    document.body.removeChild(iframe);
+                };
+                element.onerror = () => {
+                    if (timeOutId) {
+                        clearTimeout(timeOutId);
+                    }
+                    resolve({
+                        ip: ip,
+                        port: port,
+                        error: "error"
+                    });
+                    document.body.removeChild(iframe);
+                };
+                iframe.contentDocument.head.appendChild(element);
+            });
+        }
+
+        const url = new URL(location.href);
+        const size = Number(url.searchParams.get('size')) || 10;
+        const pool = new Pool(size);
+
+        addEventListener("message", (event) => {
+            let origin = event.origin || event.originalEvent.origin;
+            let url = new URL(origin);
+            if (!location.hostname.endsWith(url.hostname)) {
+                return;
+            }
+
+            let data = event.data;
+            for (let ip of data.ips) {
+                for (let port of data.ports) {
+                    pool.applyAsync(scan, [ip, port, data.timeout || 2500, data.findAuthResponses || false]);
+                }
+            }
+            pool.done().then((result) => {
+                parent.postMessage({
+                    id: data.id,
+                    type: "scan",
+                    list: result
+                });
+            });
+        }, false);
+    </script>
+</head>
+<body>
+</body>
+</html>

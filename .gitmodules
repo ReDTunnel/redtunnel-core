@@ -1,0 +1,3 @@
+[submodule "redtunnel-ui"]
+	path = redtunnel-ui
+	url = git@github.com:ReDTunnel/redtunnel-ui.git

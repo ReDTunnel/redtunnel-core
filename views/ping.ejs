@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>ReDTunnel - Ping</title>
+    <script type="module">
+        import {Pool} from '/js/jspool.js';
+
+        function ping(ip, port = 65535, timeout = 2000) {
+            return new Promise((resolve, reject) => {
+                try {
+                    const xhr = new XMLHttpRequest();
+                    xhr.open('GET', `http://${ip}:${port}/`, true, "ReDTunnel", "ReDTunnel");
+                    xhr.setRequestHeader('cache-control', 'no-cache, must-revalidate, post-check=0, pre-check=0');
+                    xhr.setRequestHeader('cache-control', 'max-age=0');
+                    xhr.setRequestHeader('expires', '0');
+                    xhr.setRequestHeader('expires', 'Tue, 01 Jan 1980 1:00:00 GMT');
+                    xhr.setRequestHeader('pragma', 'no-cache');
+                    xhr.timedout = false;
+                    xhr.timeout = timeout;
+                    xhr.addEventListener("loadstart", function () {
+                        this.loadstart = Date.now();
+                    });
+                    xhr.addEventListener("timeout", function () {
+                        this.timedout = true;
+                    });
+                    xhr.addEventListener("loadend", function () {
+                        this.loadend = Date.now();
+                        resolve({
+                            ip: ip,
+                            timeout: this.timedout,
+                            error: this.timedout ? "timeout" : undefined,
+                            elapsed: this.loadend - this.loadstart
+                        });
+                    });
+                    xhr.send();
+                } catch (e) {
+                    reject(e);
+                }
+            });
+        }
+
+        const url = new URL(location.href);
+        const size = Number(url.searchParams.get('size')) || 10;
+        const pool = new Pool(size);
+
+        addEventListener("message", (event) => {
+            let origin = event.origin || event.originalEvent.origin;
+            let url = new URL(origin);
+            if (!location.hostname.endsWith(url.hostname)) {
+                return;
+            }
+
+            let data = event.data;
+            for (let ip of data.ips) {
+                pool.applyAsync(ping, [ip, data.port || 65535, data.timeout = 2000]);
+            }
+            pool.done().then((result) => {
+                parent.postMessage({
+                    id: data.id,
+                    type: "ping",
+                    list: result
+                });
+            });
+        }, false);
+    </script>
+</head>
+<body>
+</body>
+</html>
