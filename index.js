@@ -173,7 +173,7 @@ app.get('/register', (req, res) => {
 });
 
 app.get('/config', (req, res) => {
-    db.Config.findOne().exec((err, data) => {
+    db.Config.findOne().select('-_id -__v').exec((err, data) => {
         if (err) {
             return res.json({error: err.message});
         }
@@ -280,7 +280,9 @@ io.on('connection', (socket) => {
                 id: id
             })}\n`);
 
-            db.Rebind.deleteMany({id: id});
+            db.Rebind.deleteMany({id: id}, function (err, data) {
+                // console.log(JSON.stringify({id: id, err: err, data: data}));
+            });
         }, 60000);
 
         console.log(`${socket.handshake.query.id} disconnected`);

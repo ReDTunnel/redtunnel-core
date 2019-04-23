@@ -79,7 +79,15 @@ router.route('/setup')
                 if (err) {
                     return res.json({error: err.message});
                 }
-                return res.json({success: true});
+
+                const config = db.Config();
+
+                config.save(function (err) {
+                    if (err) {
+                        return res.json({error: err.message});
+                    }
+                    return res.json({success: true});
+                });
             })
         });
     });
@@ -104,7 +112,7 @@ router.get('/init', (req, res) => {
 
 router.route('/config')
     .get((req, res) => {
-        db.Config.findOne().exec((err, data) => {
+        db.Config.findOne().select('-_id -__v').exec((err, data) => {
             if (err) {
                 return res.json({error: err.message});
             }
@@ -116,12 +124,17 @@ router.route('/config')
         });
     })
     .post((req, res) => {
-        const config = new db.Config(req.body);
-        config.save((err, data) => {
+        db.Config.updateOne({}, req.body, (err, data) => {
             if (err) {
                 return res.json({error: err.message});
             }
-            return res.json(data);
+
+            db.Config.findOne().select('-_id -__v').exec((err, data) => {
+                if (err) {
+                    return res.json({error: err.message});
+                }
+                return res.json(data);
+            });
         })
     });
 
